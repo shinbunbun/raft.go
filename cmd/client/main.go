@@ -42,7 +42,7 @@ func AppendLogs(args []string) (string, error) {
 	logArgs := args[1:]
 	var log []domain.Log = make([]domain.Log, len(logArgs))
 	for i, v := range logArgs {
-		log[i] = domain.Log(v)
+		log[i] = domain.Log{Log: v}
 	}
 	if err := sendRPC(args[0], "StateMachine.AppendLogs", domain.AppendLogsArgs{Entries: log}, &reply); err != nil {
 		return "", err

@@ -3,13 +3,18 @@ package domain
 import (
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/secamp-y3/raft.go/server"
 )
 
-type Log string
+type Log struct {
+	Log  string
+	Term int
+}
 
 type StateMachine struct {
 	Node           *server.Node
@@ -18,6 +23,10 @@ type StateMachine struct {
 	Term           int
 	Leader         string
 	Role           string
+	CommitIndex    int
+	LastApplied    int
+	NextIndex      map[string]int
+	MatchIndex     map[string]int
 }
 
 type AppendLogsArgs struct {
@@ -27,11 +36,17 @@ type AppendLogsArgs struct {
 type AppendLogsReply int
 
 type AppendEntriesArgs struct {
-	Log  []Log
-	Term int
+	Log          []Log
+	Term         int
+	PrevLogIndex int
+	LeaderCommit int
+	PrevLogTerm  int
 }
 
-type AppendEntriesReply struct{}
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
 
 type RequestVoteArgs struct {
 	Term   int
@@ -45,9 +60,56 @@ type RequestVoteReply struct {
 func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) error {
 	s.Log = append(s.Log, input.Entries...)
 	channel := s.Node.Channels()
-	for _, c := range channel {
+	for k, c := range channel {
 		appendEntriesReply := &AppendEntriesReply{}
-		c.Call("StateMachine.AppendEntries", AppendEntriesArgs{Log: input.Entries}, appendEntriesReply)
+		sendLogs := []Log{}
+		fmt.Printf("NextIndex: %v\n", s.NextIndex)
+		sendLogs = append(sendLogs, s.Log[s.NextIndex[k]-1:]...)
+		prevLogIndex := s.NextIndex[k] - 1
+		var prevLogTerm int
+		if s.NextIndex[k] == 1 {
+			prevLogTerm = s.Term
+		} else {
+			prevLogTerm = s.Log[prevLogIndex-1].Term
+		}
+		appendEntriesArgs := AppendEntriesArgs{
+			Log:          sendLogs,
+			Term:         s.Term,
+			PrevLogIndex: prevLogIndex,
+			LeaderCommit: s.CommitIndex,
+			PrevLogTerm:  prevLogTerm,
+		}
+		err := c.Call("StateMachine.AppendEntries", appendEntriesArgs, appendEntriesReply)
+		if err != nil {
+			fmt.Printf("Failed to send heartbeat: %v\n", err)
+			s.Node.Network().Remove(k)
+		}
+
+		if appendEntriesReply.Success {
+			s.MatchIndex[k] = len(s.Log)
+			s.NextIndex[k] = len(s.Log) + 1
+		} else {
+			fmt.Printf("NextIndex: %v\n", s.NextIndex)
+			s.NextIndex[k] -= 1
+			s.AppendLogs(input, reply)
+		}
+	}
+	matchIndexSlice := []int{}
+	for _, v := range s.MatchIndex {
+		matchIndexSlice = append(matchIndexSlice, v)
+	}
+	matchIndexSlice = sort.IntSlice(matchIndexSlice)
+	for _, v := range matchIndexSlice {
+		cnt := 0
+		for _, v2 := range matchIndexSlice {
+			if v2 >= v {
+				cnt++
+			}
+		}
+		if cnt > len(matchIndexSlice)/2 {
+			s.CommitIndex = v
+			break
+		}
 	}
 	fmt.Printf("Log: %v\n", s.Log)
 	return nil
@@ -60,8 +122,28 @@ func (s *StateMachine) AppendEntries(input AppendEntriesArgs, reply *AppendEntri
 	s.Term = input.Term
 	s.Role = "follower"
 	s.HeartbeatWatch <- 1
-	s.Log = append(s.Log, input.Log...)
-	fmt.Printf("Log: %v\n", s.Log)
+	if len(input.Log) == 0 {
+		// s.Log = append(s.Log, input.Log...)
+		fmt.Printf("Log: %v\n", s.Log)
+		return nil
+	}
+	/* if input.PrevLogIndex >= len(s.Log) {
+		reply.Success = false
+		return nil
+	} */
+	// s.Log = append(s.Log[:input.PrevLogIndex-1], input.Log...)
+	fmt.Printf("len(s.Log): %d, input.PrevLogIndex: %d\n", len(s.Log), input.PrevLogIndex)
+	if len(s.Log) < input.PrevLogIndex {
+		reply.Success = false
+		return nil
+	}
+
+	s.Log = append(s.Log[:input.PrevLogIndex], input.Log...)
+
+	if input.LeaderCommit > s.CommitIndex {
+		s.CommitIndex = int(math.Min(float64(input.LeaderCommit), float64(len(s.Log)-1)))
+	}
+	reply.Success = true
 	return nil
 }
 
@@ -82,12 +164,9 @@ func (s *StateMachine) RequestVote(input RequestVoteArgs, reply *RequestVoteRepl
 func (s *StateMachine) HeartBeat() {
 	fmt.Println("HeartBeat")
 	channel := s.Node.Channels()
-	fmt.Printf("Channel: %v\n", channel)
 	for k, ch := range channel {
 		appendEntriesReply := &AppendEntriesReply{}
-		println(1)
 		err := ch.Call("StateMachine.AppendEntries", AppendEntriesArgs{Term: s.Term}, appendEntriesReply)
-		println(2)
 		if err != nil {
 			fmt.Printf("Failed to send heartbeat: %v\n", err)
 			s.Node.Network().Remove(k)
@@ -97,6 +176,16 @@ func (s *StateMachine) HeartBeat() {
 }
 
 func (s *StateMachine) ExecLeader() {
+	channels := s.Node.Channels()
+	fmt.Printf("Channels: %v\n", channels)
+	for k := range channels {
+		if _, ok := s.NextIndex[k]; !ok {
+			fmt.Printf("NextIndex: %v\n", s.NextIndex)
+			fmt.Printf("Log length: %d\n", len(s.Log))
+			s.NextIndex[k] = len(s.Log) + 1
+			fmt.Printf("NextIndex: %v\n", s.NextIndex)
+		}
+	}
 	s.HeartBeat()
 }
 

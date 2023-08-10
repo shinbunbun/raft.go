@@ -22,7 +22,7 @@
       <div v-for="(d, i) in data" :key="i" class="col">
         <div class="card col-3" style="width: 18rem; margin-bottom: 20px">
           <div class="card-body">
-            <h5 class="card-title">{{ d.Node.name }}</h5>
+            <h5 class="card-title">{{ d.Node.name }}({{ d.Role }})</h5>
             <p class="card-text">{{ d.Log }}</p>
           </div>
         </div>
@@ -53,16 +53,10 @@ export default {
   },
   async mounted() {
     console.log('Component mounted.')
-    let response, bodyJson;
-    try {
-     response = await fetch('http://localhost:8080/monitor?address=172.26.250.11:8000')
-     bodyJson = await response.json()
-      console.log(bodyJson)
-      this.members = bodyJson.members
-      this.members.push(bodyJson.node_info)
-    } catch (e) {
-      console.log(e)
-    }
+    const bodyJson = await this.getMonitor(11)
+    console.log(bodyJson)
+    this.members = bodyJson.members
+    this.members.push(bodyJson.node_info)
     setInterval(() => {
       this.getInfo()
     }, 1000);
@@ -78,9 +72,13 @@ export default {
   },
   methods: {
     async getInfo() {
-        this.members.forEach( async e => {
+        this.members.forEach( async el => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => { controller.abort() }, 1000);
           try {
-            const response = await fetch('http://localhost:8080/info?address=' + e.endpoint)
+            const response = await fetch('http://localhost:8080/info?address=' + el.endpoint, {
+              signal: controller.signal
+            })
             const bodyJson = await response.json()
             console.log(bodyJson)
             this.data[bodyJson.Node.name] = bodyJson
@@ -88,6 +86,10 @@ export default {
             this.Term = bodyJson.Term
           } catch (e) {
             console.log(e)
+            this.deleteMember(el.name)
+            delete this.data[el.name]
+          } finally {
+            clearTimeout(timeout);
           }
         });
     },
@@ -101,6 +103,36 @@ export default {
       } catch (e) {
         console.log(e)
       }
+    },
+    async getMonitor(a) {
+      console.log(a)
+      if (a > 15) {
+        console.log("getMonitor error")
+        return
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => { controller.abort() }, 1000);
+      try {
+        const response = await fetch('http://localhost:8080/monitor?address=172.26.250.' + a + ':8000', {
+          signal: controller.signal
+        })
+        const bodyJson = await response.json()
+        return bodyJson
+      } catch (e) {
+        console.log(e)
+        return await this.getMonitor(a+1)
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    deleteMember(el) {
+      for (let index = 0; index < this.members.length; index++) {
+        if (this.members[index].name === el) {
+          this.members.splice(index, 1)
+          break
+        }
+      }
+      console.log(this.members)
     }
   }
 }

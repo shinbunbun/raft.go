@@ -57,8 +57,24 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
+type GetArgs struct{}
+
+type GetReply struct {
+	Node        *server.Node
+	Log         []Log
+	Term        int
+	Leader      string
+	Role        string
+	CommitIndex int
+	LastApplied int
+	NextIndex   map[string]int
+	MatchIndex  map[string]int
+}
+
 func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) error {
-	s.Log = append(s.Log, input.Entries...)
+	for _, v := range input.Entries {
+		s.Log = append(s.Log, Log{Log: v.Log, Term: s.Term})
+	}
 	channel := s.Node.Channels()
 	for k, c := range channel {
 		appendEntriesReply := &AppendEntriesReply{}
@@ -158,6 +174,19 @@ func (s *StateMachine) RequestVote(input RequestVoteArgs, reply *RequestVoteRepl
 	s.Role = "follower"
 	reply.VoteGranted = true
 	fmt.Printf("Role began follower, Term: %d, Role: %s, Leader: %s\n", s.Term, s.Role, s.Leader)
+	return nil
+}
+
+func (s *StateMachine) Get(input GetArgs, reply *GetReply) error {
+	reply.Node = s.Node
+	reply.Log = s.Log
+	reply.Term = s.Term
+	reply.Leader = s.Leader
+	reply.Role = s.Role
+	reply.CommitIndex = s.CommitIndex
+	reply.LastApplied = s.LastApplied
+	reply.NextIndex = s.NextIndex
+	reply.MatchIndex = s.MatchIndex
 	return nil
 }
 

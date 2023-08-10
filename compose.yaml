@@ -67,6 +67,18 @@ services:
       cluster:
         ipv4_address: 172.26.250.2
 
+  webserver:
+    build: .
+    tty: true
+    volumes:
+      - .:/go/src/app
+    command: go run cmd/webserver/main.go
+    ports:
+      - "8080:8080"
+    networks:
+      cluster:
+        ipv4_address: 172.26.250.3
+
 networks:
   cluster:
     ipam:

@@ -246,12 +246,21 @@ func (s *StateMachine) ExecCandidate() {
 	voteGrantedCnt := 0
 	for k, c := range channels {
 		requestVoteReply := RequestVoteReply{}
-		err := c.Call("StateMachine.RequestVote", RequestVoteArgs{Term: s.Term, Leader: s.Node.Name}, &requestVoteReply)
-		if err != nil {
-			fmt.Printf("RequestVote Error: %v\n", err)
+		ch := make(chan error, 1)
+		go func() {
+			ch <- c.Call("StateMachine.RequestVote", RequestVoteArgs{Term: s.Term, Leader: s.Node.Name}, &requestVoteReply)
+		}()
+		select {
+		case err := <-ch:
+			if err != nil {
+				fmt.Printf("RequestVote Error: %v\n", err)
+				s.Node.Network().Remove(k)
+				fmt.Printf("key: %v, Channel: %v\n", k, s.Node.Channels())
+				continue
+			}
+		case <-time.After(500 * time.Millisecond):
+			fmt.Println("RequestVote Timeout")
 			s.Node.Network().Remove(k)
-
-			fmt.Printf("key: %v, Channel: %v\n", k, s.Node.Channels())
 			continue
 		}
 		if requestVoteReply.VoteGranted {

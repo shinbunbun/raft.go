@@ -20,13 +20,13 @@ type StateMachine struct {
 	Node           *server.Node
 	Log            []Log
 	HeartbeatWatch chan int
-	Term           int
 	Leader         string
 	Role           string
 	CommitIndex    int
 	LastApplied    int
 	NextIndex      map[string]int
 	MatchIndex     map[string]int
+	CurrentTerm    int
 }
 
 type AppendLogsArgs struct {
@@ -73,7 +73,7 @@ type GetReply struct {
 
 func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) error {
 	for _, v := range input.Entries {
-		s.Log = append(s.Log, Log{Log: v.Log, Term: s.Term})
+		s.Log = append(s.Log, Log{Log: v.Log, Term: s.CurrentTerm})
 	}
 	channel := s.Node.Channels()
 	for k, c := range channel {
@@ -84,13 +84,13 @@ func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) 
 		prevLogIndex := s.NextIndex[k] - 1
 		var prevLogTerm int
 		if s.NextIndex[k] == 1 {
-			prevLogTerm = s.Term
+			prevLogTerm = s.CurrentTerm
 		} else {
 			prevLogTerm = s.Log[prevLogIndex-1].Term
 		}
 		appendEntriesArgs := AppendEntriesArgs{
 			Log:          sendLogs,
-			Term:         s.Term,
+			Term:         s.CurrentTerm,
 			PrevLogIndex: prevLogIndex,
 			LeaderCommit: s.CommitIndex,
 			PrevLogTerm:  prevLogTerm,
@@ -132,10 +132,10 @@ func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) 
 }
 
 func (s *StateMachine) AppendEntries(input AppendEntriesArgs, reply *AppendEntriesReply) error {
-	if input.Term < s.Term {
+	if input.Term < s.CurrentTerm {
 		return nil
 	}
-	s.Term = input.Term
+	s.CurrentTerm = input.Term
 	s.Role = "follower"
 	s.HeartbeatWatch <- 1
 	if len(input.Log) == 0 {
@@ -165,22 +165,22 @@ func (s *StateMachine) AppendEntries(input AppendEntriesArgs, reply *AppendEntri
 
 func (s *StateMachine) RequestVote(input RequestVoteArgs, reply *RequestVoteReply) error {
 	fmt.Println("RequestVote Start")
-	if input.Term < s.Term {
-		fmt.Printf("RequestVote failed. InputTerm: %d, Term: %d\n", input.Term, s.Term)
+	if input.Term < s.CurrentTerm {
+		fmt.Printf("RequestVote failed. InputTerm: %d, Term: %d\n", input.Term, s.CurrentTerm)
 		return nil
 	}
-	s.Term = input.Term
+	s.CurrentTerm = input.Term
 	s.Leader = input.Leader
 	s.Role = "follower"
 	reply.VoteGranted = true
-	fmt.Printf("Role began follower, Term: %d, Role: %s, Leader: %s\n", s.Term, s.Role, s.Leader)
+	fmt.Printf("Role began follower, Term: %d, Role: %s, Leader: %s\n", s.CurrentTerm, s.Role, s.Leader)
 	return nil
 }
 
 func (s *StateMachine) Get(input GetArgs, reply *GetReply) error {
 	reply.Node = s.Node
 	reply.Log = s.Log
-	reply.Term = s.Term
+	reply.Term = s.CurrentTerm
 	reply.Leader = s.Leader
 	reply.Role = s.Role
 	reply.CommitIndex = s.CommitIndex
@@ -195,7 +195,7 @@ func (s *StateMachine) HeartBeat() {
 	channel := s.Node.Channels()
 	for k, ch := range channel {
 		appendEntriesReply := &AppendEntriesReply{}
-		err := ch.Call("StateMachine.AppendEntries", AppendEntriesArgs{Term: s.Term}, appendEntriesReply)
+		err := ch.Call("StateMachine.AppendEntries", AppendEntriesArgs{Term: s.CurrentTerm}, appendEntriesReply)
 		if err != nil {
 			fmt.Printf("Failed to send heartbeat: %v\n", err)
 			s.Node.Network().Remove(k)
@@ -235,9 +235,9 @@ func (s *StateMachine) ExecFollower(heartbeatWatch chan int) {
 		}
 		log.Println("Timeout")
 		log.Println("Heartbeat is not working")
-		s.Term++
+		s.CurrentTerm++
 		s.Role = "candidate"
-		fmt.Printf("Role began candidate: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.Term)
+		fmt.Printf("Role began candidate: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.CurrentTerm)
 	}
 }
 
@@ -248,7 +248,7 @@ func (s *StateMachine) ExecCandidate() {
 		requestVoteReply := RequestVoteReply{}
 		ch := make(chan error, 1)
 		go func() {
-			ch <- c.Call("StateMachine.RequestVote", RequestVoteArgs{Term: s.Term, Leader: s.Node.Name}, &requestVoteReply)
+			ch <- c.Call("StateMachine.RequestVote", RequestVoteArgs{Term: s.CurrentTerm, Leader: s.Node.Name}, &requestVoteReply)
 		}()
 		select {
 		case err := <-ch:
@@ -271,5 +271,5 @@ func (s *StateMachine) ExecCandidate() {
 		s.Role = "leader"
 		s.Leader = s.Node.Name
 	}
-	fmt.Printf("Role began leader: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.Term)
+	fmt.Printf("Role began leader: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.CurrentTerm)
 }

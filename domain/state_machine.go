@@ -252,7 +252,7 @@ func (s *StateMachine) ExecFollower(heartbeatWatch chan int) {
 
 func (s *StateMachine) ExecCandidate() {
 	channels := s.Node.Channels()
-	voteGrantedCnt := 0
+	voteGrantedCnt := 1
 	for k, c := range channels {
 		requestVoteReply := RequestVoteReply{}
 		ch := make(chan error, 1)
@@ -267,7 +267,7 @@ func (s *StateMachine) ExecCandidate() {
 				fmt.Printf("key: %v, Channel: %v\n", k, s.Node.Channels())
 				continue
 			}
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(150 * time.Millisecond):
 			fmt.Println("RequestVote Timeout")
 			s.Node.Network().Remove(k)
 			continue

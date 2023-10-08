@@ -36,7 +36,7 @@ func main() {
 	}
 
 	heartbeatWatch := make(chan int, 100)
-	stateMachine := domain.StateMachine{Node: node, Log: []domain.Log{}, HeartbeatWatch: heartbeatWatch, Term: 0, Role: "follower", CommitIndex: 0, LastApplied: 0, NextIndex: make(map[string]int), MatchIndex: make(map[string]int)}
+	stateMachine := domain.StateMachine{Node: node, HeartbeatWatch: heartbeatWatch, State: domain.State{CurrentTerm: 0, Log: []domain.Log{}, CommitIndex: 0, LastApplied: 0}, Role: "follower", LeaderState: domain.LeaderState{NextIndex: make(map[string]int), MatchIndex: make(map[string]int)}}
 
 	svr := rpc.NewServer()
 	svr.RegisterName("Monitor", &domain.Monitor{Node: node})

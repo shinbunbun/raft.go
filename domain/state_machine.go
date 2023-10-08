@@ -16,17 +16,26 @@ type Log struct {
 	Term int
 }
 
+type State struct {
+	CurrentTerm int
+	VotedFor    string
+	Log         []Log
+	CommitIndex int
+	LastApplied int
+}
+
+type LeaderState struct {
+	NextIndex  map[string]int
+	MatchIndex map[string]int
+}
+
 type StateMachine struct {
 	Node           *server.Node
-	Log            []Log
 	HeartbeatWatch chan int
-	Term           int
 	Leader         string
 	Role           string
-	CommitIndex    int
-	LastApplied    int
-	NextIndex      map[string]int
-	MatchIndex     map[string]int
+	State          State
+	LeaderState    LeaderState
 }
 
 type AppendLogsArgs struct {
@@ -73,26 +82,26 @@ type GetReply struct {
 
 func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) error {
 	for _, v := range input.Entries {
-		s.Log = append(s.Log, Log{Log: v.Log, Term: s.Term})
+		s.State.Log = append(s.State.Log, Log{Log: v.Log, Term: s.State.CurrentTerm})
 	}
 	channel := s.Node.Channels()
 	for k, c := range channel {
 		appendEntriesReply := &AppendEntriesReply{}
 		sendLogs := []Log{}
-		fmt.Printf("NextIndex: %v\n", s.NextIndex)
-		sendLogs = append(sendLogs, s.Log[s.NextIndex[k]-1:]...)
-		prevLogIndex := s.NextIndex[k] - 1
+		fmt.Printf("NextIndex: %v\n", s.LeaderState.NextIndex)
+		sendLogs = append(sendLogs, s.State.Log[s.LeaderState.NextIndex[k]-1:]...)
+		prevLogIndex := s.LeaderState.NextIndex[k] - 1
 		var prevLogTerm int
-		if s.NextIndex[k] == 1 {
-			prevLogTerm = s.Term
+		if s.LeaderState.NextIndex[k] == 1 {
+			prevLogTerm = s.State.CurrentTerm
 		} else {
-			prevLogTerm = s.Log[prevLogIndex-1].Term
+			prevLogTerm = s.State.Log[prevLogIndex-1].Term
 		}
 		appendEntriesArgs := AppendEntriesArgs{
 			Log:          sendLogs,
-			Term:         s.Term,
+			Term:         s.State.CurrentTerm,
 			PrevLogIndex: prevLogIndex,
-			LeaderCommit: s.CommitIndex,
+			LeaderCommit: s.State.CommitIndex,
 			PrevLogTerm:  prevLogTerm,
 		}
 		err := c.Call("StateMachine.AppendEntries", appendEntriesArgs, appendEntriesReply)
@@ -102,16 +111,16 @@ func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) 
 		}
 
 		if appendEntriesReply.Success {
-			s.MatchIndex[k] = len(s.Log)
-			s.NextIndex[k] = len(s.Log) + 1
+			s.LeaderState.MatchIndex[k] = len(s.State.Log)
+			s.LeaderState.NextIndex[k] = len(s.State.Log) + 1
 		} else {
-			fmt.Printf("NextIndex: %v\n", s.NextIndex)
-			s.NextIndex[k] -= 1
+			fmt.Printf("NextIndex: %v\n", s.LeaderState.NextIndex)
+			s.LeaderState.NextIndex[k] -= 1
 			s.AppendLogs(input, reply)
 		}
 	}
 	matchIndexSlice := []int{}
-	for _, v := range s.MatchIndex {
+	for _, v := range s.LeaderState.MatchIndex {
 		matchIndexSlice = append(matchIndexSlice, v)
 	}
 	matchIndexSlice = sort.IntSlice(matchIndexSlice)
@@ -123,41 +132,41 @@ func (s *StateMachine) AppendLogs(input AppendLogsArgs, reply *AppendLogsReply) 
 			}
 		}
 		if cnt > len(matchIndexSlice)/2 {
-			s.CommitIndex = v
+			s.State.CommitIndex = v
 			break
 		}
 	}
-	fmt.Printf("Log: %v\n", s.Log)
+	fmt.Printf("Log: %v\n", s.State.Log)
 	return nil
 }
 
 func (s *StateMachine) AppendEntries(input AppendEntriesArgs, reply *AppendEntriesReply) error {
-	if input.Term < s.Term {
+	if input.Term < s.State.CurrentTerm {
 		return nil
 	}
-	s.Term = input.Term
+	s.State.CurrentTerm = input.Term
 	s.Role = "follower"
 	s.HeartbeatWatch <- 1
 	if len(input.Log) == 0 {
-		// s.Log = append(s.Log, input.Log...)
-		fmt.Printf("Log: %v\n", s.Log)
+		// s.State.Log = append(s.State.Log, input.Log...)
+		fmt.Printf("Log: %v\n", s.State.Log)
 		return nil
 	}
-	/* if input.PrevLogIndex >= len(s.Log) {
+	/* if input.PrevLogIndex >= len(s.State.Log) {
 		reply.Success = false
 		return nil
 	} */
-	// s.Log = append(s.Log[:input.PrevLogIndex-1], input.Log...)
-	fmt.Printf("len(s.Log): %d, input.PrevLogIndex: %d\n", len(s.Log), input.PrevLogIndex)
-	if len(s.Log) < input.PrevLogIndex {
+	// s.State.Log = append(s.State.Log[:input.PrevLogIndex-1], input.Log...)
+	fmt.Printf("len(s.State.Log): %d, input.PrevLogIndex: %d\n", len(s.State.Log), input.PrevLogIndex)
+	if len(s.State.Log) < input.PrevLogIndex {
 		reply.Success = false
 		return nil
 	}
 
-	s.Log = append(s.Log[:input.PrevLogIndex], input.Log...)
+	s.State.Log = append(s.State.Log[:input.PrevLogIndex], input.Log...)
 
-	if input.LeaderCommit > s.CommitIndex {
-		s.CommitIndex = int(math.Min(float64(input.LeaderCommit), float64(len(s.Log)-1)))
+	if input.LeaderCommit > s.State.CommitIndex {
+		s.State.CommitIndex = int(math.Min(float64(input.LeaderCommit), float64(len(s.State.Log)-1)))
 	}
 	reply.Success = true
 	return nil
@@ -165,28 +174,28 @@ func (s *StateMachine) AppendEntries(input AppendEntriesArgs, reply *AppendEntri
 
 func (s *StateMachine) RequestVote(input RequestVoteArgs, reply *RequestVoteReply) error {
 	fmt.Println("RequestVote Start")
-	if input.Term < s.Term {
-		fmt.Printf("RequestVote failed. InputTerm: %d, Term: %d\n", input.Term, s.Term)
+	if input.Term < s.State.CurrentTerm {
+		fmt.Printf("RequestVote failed. InputTerm: %d, Term: %d\n", input.Term, s.State.CurrentTerm)
 		return nil
 	}
-	s.Term = input.Term
+	s.State.CurrentTerm = input.Term
 	s.Leader = input.Leader
 	s.Role = "follower"
 	reply.VoteGranted = true
-	fmt.Printf("Role began follower, Term: %d, Role: %s, Leader: %s\n", s.Term, s.Role, s.Leader)
+	fmt.Printf("Role began follower, Term: %d, Role: %s, Leader: %s\n", s.State.CurrentTerm, s.Role, s.Leader)
 	return nil
 }
 
 func (s *StateMachine) Get(input GetArgs, reply *GetReply) error {
 	reply.Node = s.Node
-	reply.Log = s.Log
-	reply.Term = s.Term
+	reply.Log = s.State.Log
+	reply.Term = s.State.CurrentTerm
 	reply.Leader = s.Leader
 	reply.Role = s.Role
-	reply.CommitIndex = s.CommitIndex
-	reply.LastApplied = s.LastApplied
-	reply.NextIndex = s.NextIndex
-	reply.MatchIndex = s.MatchIndex
+	reply.CommitIndex = s.State.CommitIndex
+	reply.LastApplied = s.State.LastApplied
+	reply.NextIndex = s.LeaderState.NextIndex
+	reply.MatchIndex = s.LeaderState.MatchIndex
 	return nil
 }
 
@@ -195,7 +204,7 @@ func (s *StateMachine) HeartBeat() {
 	channel := s.Node.Channels()
 	for k, ch := range channel {
 		appendEntriesReply := &AppendEntriesReply{}
-		err := ch.Call("StateMachine.AppendEntries", AppendEntriesArgs{Term: s.Term}, appendEntriesReply)
+		err := ch.Call("StateMachine.AppendEntries", AppendEntriesArgs{Term: s.State.CurrentTerm}, appendEntriesReply)
 		if err != nil {
 			fmt.Printf("Failed to send heartbeat: %v\n", err)
 			s.Node.Network().Remove(k)
@@ -208,11 +217,11 @@ func (s *StateMachine) ExecLeader() {
 	channels := s.Node.Channels()
 	fmt.Printf("Channels: %v\n", channels)
 	for k := range channels {
-		if _, ok := s.NextIndex[k]; !ok {
-			fmt.Printf("NextIndex: %v\n", s.NextIndex)
-			fmt.Printf("Log length: %d\n", len(s.Log))
-			s.NextIndex[k] = len(s.Log) + 1
-			fmt.Printf("NextIndex: %v\n", s.NextIndex)
+		if _, ok := s.LeaderState.NextIndex[k]; !ok {
+			fmt.Printf("NextIndex: %v\n", s.LeaderState.NextIndex)
+			fmt.Printf("Log length: %d\n", len(s.State.Log))
+			s.LeaderState.NextIndex[k] = len(s.State.Log) + 1
+			fmt.Printf("NextIndex: %v\n", s.LeaderState.NextIndex)
 		}
 	}
 	s.HeartBeat()
@@ -235,20 +244,20 @@ func (s *StateMachine) ExecFollower(heartbeatWatch chan int) {
 		}
 		log.Println("Timeout")
 		log.Println("Heartbeat is not working")
-		s.Term++
+		s.State.CurrentTerm++
 		s.Role = "candidate"
-		fmt.Printf("Role began candidate: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.Term)
+		fmt.Printf("Role began candidate: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.State.CurrentTerm)
 	}
 }
 
 func (s *StateMachine) ExecCandidate() {
 	channels := s.Node.Channels()
-	voteGrantedCnt := 0
+	voteGrantedCnt := 1
 	for k, c := range channels {
 		requestVoteReply := RequestVoteReply{}
 		ch := make(chan error, 1)
 		go func() {
-			ch <- c.Call("StateMachine.RequestVote", RequestVoteArgs{Term: s.Term, Leader: s.Node.Name}, &requestVoteReply)
+			ch <- c.Call("StateMachine.RequestVote", RequestVoteArgs{Term: s.State.CurrentTerm, Leader: s.Node.Name}, &requestVoteReply)
 		}()
 		select {
 		case err := <-ch:
@@ -258,7 +267,7 @@ func (s *StateMachine) ExecCandidate() {
 				fmt.Printf("key: %v, Channel: %v\n", k, s.Node.Channels())
 				continue
 			}
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(150 * time.Millisecond):
 			fmt.Println("RequestVote Timeout")
 			s.Node.Network().Remove(k)
 			continue
@@ -271,5 +280,5 @@ func (s *StateMachine) ExecCandidate() {
 		s.Role = "leader"
 		s.Leader = s.Node.Name
 	}
-	fmt.Printf("Role began leader: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.Term)
+	fmt.Printf("Role began leader: Role: %s, Leader: %s, Term: %d\n", s.Role, s.Leader, s.State.CurrentTerm)
 }
